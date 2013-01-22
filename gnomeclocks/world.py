@@ -19,6 +19,7 @@
 import os
 import errno
 import time
+import datetime
 import json
 from gi.repository import GLib, Gio, GdkPixbuf, Gtk
 from gi.repository import GWeather
@@ -150,6 +151,7 @@ class ClockItem:
         self.sunset = None
         self.sunrise_string = None
         self.sunset_string = None
+        self.delta = 0
 
         self._update_sunrise_sunset()
 
@@ -206,7 +208,13 @@ class ClockItem:
             self.sunset_string = TimeString.format_time(self.sunset)
 
     def tick(self):
+
         self.location_time = self._get_location_time()
+
+        d = datetime.datetime.fromtimestamp(time.mktime(self.location_time))
+        d = d + datetime.timedelta(self.delta / 24.0)
+        self.location_time = d.timetuple()
+
         self.time_string = TimeString.format_time(self.location_time)
         self.day_string = self._get_day_string()
         self._update_sunrise_sunset()
@@ -304,6 +312,10 @@ class World(Clock):
         self.select_button = SymbolicToolButton("object-select-symbolic")
         self.select_button.connect('clicked', self._on_select_clicked)
 
+        self.now_button = ToolButton(_("Now"))
+        self.now_button.connect('clicked', self._on_now_clicked)
+        self.now_button.set_sensitive(False)
+
         self.done_button = ToolButton(_("Done"))
         self.done_button.get_style_context().add_class('suggested-action')
         self.done_button.connect("clicked", self._on_done_clicked)
@@ -327,9 +339,31 @@ class World(Clock):
         contentview = ContentView(self.iconview,
                                   "document-open-recent-symbolic",
                                   _("Select <b>New</b> to add a world clock"))
+
+        contentview.set_hexpand(True)
+        contentview.set_vexpand(True)
+
+        self.scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
+        self.scale.set_range(-12, 12)
+        self.scale.set_digits(2)
+
+        self.scale.add_mark(0, Gtk.PositionType.BOTTOM, _("now"))
+        for i in range(-12, 13, 2):
+            if i == 0:
+                continue
+            self.scale.add_mark(i, Gtk.PositionType.BOTTOM, _("%dh") % i)
+
+        self.scale.set_value(0)
+        self.scale.connect("value-changed", self._on_scale_changed)
+        self.scale.set_hexpand(True)
+
+        overview_grid = Gtk.Grid()
+        overview_grid.attach(contentview, 0, 0, 1, 1)
+        overview_grid.attach(self.scale, 0, 1, 1, 1)
+
         self.standalone = WorldStandalone()
 
-        self.insert_page(contentview, World.Page.OVERVIEW)
+        self.insert_page(overview_grid, World.Page.OVERVIEW)
         self.insert_page(self.standalone, World.Page.STANDALONE)
         self.set_current_page(World.Page.OVERVIEW)
 
@@ -337,6 +371,19 @@ class World(Clock):
         self.load_clocks()
 
         wallclock.connect("time-changed", self._tick_clocks)
+
+    def _on_scale_changed(self, scale):
+        val = scale.get_value()
+        for c in self.clocks:
+            c.delta = val
+        self._tick_clocks()
+
+        self.now_button.set_sensitive(val != 0)
+        return False
+
+    def _on_now_clicked(self, button):
+        self.scale.set_value(0)
+        return False
 
     def _on_new_clicked(self, button):
         self.activate_new()
@@ -427,6 +474,7 @@ class World(Clock):
             else:
                 self._toolbar.set_mode(Toolbar.Mode.NORMAL)
                 self._toolbar.add_widget(self.new_button)
+                self._toolbar.add_widget(self.now_button)
                 self._toolbar.add_widget(self.select_button, Gtk.PackType.END)
         elif self.get_current_page() == World.Page.STANDALONE:
             self._toolbar.set_mode(Toolbar.Mode.STANDALONE)
