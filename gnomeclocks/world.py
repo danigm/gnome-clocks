@@ -20,11 +20,13 @@ import os
 import errno
 import time
 import json
+import datetime
 from gi.repository import GLib, Gio, GdkPixbuf, Gtk
 from gi.repository import GWeather
 from .clocks import Clock
 from .utils import Dirs, TimeString, WallClock
 from .widgets import Toolbar, ToolButton, SymbolicToolButton, SelectableIconView, ContentView
+from .widgets import Spinner
 
 
 # keep the GWeather world around as a singletom, otherwise
@@ -289,10 +291,78 @@ class WorldStandalone(Gtk.EventBox):
                 self.sun_grid.hide()
 
 
+class WorldTimeTravel(Gtk.EventBox):
+    def __init__(self):
+        Gtk.EventBox.__init__(self)
+        self.get_style_context().add_class('view')
+        self.get_style_context().add_class('content-view')
+        self.can_edit = False
+
+        self.grid = Gtk.Grid()
+        self.grid.set_orientation(Gtk.Orientation.VERTICAL)
+
+        self.add(self.grid)
+
+        self.clocks = []
+
+    def set_clocks(self, clocks):
+        self.clocks = clocks
+        self.show_all()
+        self.draw_clocks()
+
+    def draw_clocks(self):
+        for w in self.grid.get_children():
+            self.grid.remove(w)
+
+        self.spinners = {}
+
+        for i, clock in enumerate(self.clocks):
+            h, m = clock.time_string.split(':')
+            label = Gtk.Label()
+            label.set_markup("<span size='22000' color='dimgray'><b>%s</b></span>" % clock.name.replace(', ', '\n'))
+            label.set_line_wrap(True)
+            hs = Spinner(0, 23, "40.0")
+            hs.set_value(int(h))
+            ms = Spinner(0, 59, "40.0")
+            ms.set_value(int(m))
+
+            hid = hs.connect('value-changed', self.clock_value_changed, clock)
+            mid = ms.connect('value-changed', self.clock_value_changed, clock)
+            self.spinners[clock] = (hs, ms, hid, mid)
+            self.grid.attach(label, 0, i, 1, 1)
+            self.grid.attach(hs, 1, i, 1, 1)
+            self.grid.attach(ms, 2, i, 1, 1)
+
+        self.grid.show_all()
+
+    def clock_value_changed(self, spinner, clock):
+        offset = clock.offset
+        hs, ms, _, __ = self.spinners[clock]
+        h = hs.get_value()
+        m = ms.get_value()
+        now = datetime.datetime.now()
+        t = datetime.datetime(now.year, now.month, now.day, int(h), int(m))
+        t = t - datetime.timedelta(seconds=offset)
+        for c in self.spinners.keys():
+            if c == clock:
+                continue
+            hs, ms, hid, mid, = self.spinners[c]
+            t2 = t + datetime.timedelta(seconds=c.offset)
+
+            hs.disconnect(hid)
+            ms.disconnect(mid)
+            hs.set_value(t2.hour)
+            ms.set_value(t2.minute)
+            hid = hs.connect('value-changed', self.clock_value_changed, c)
+            mid = ms.connect('value-changed', self.clock_value_changed, c)
+            self.spinners[c] = (hs, ms, hid, mid)
+
+
 class World(Clock):
     class Page:
         OVERVIEW = 0
         STANDALONE = 1
+        TIMETRAVEL = 2
 
     def __init__(self, toolbar, embed):
         Clock.__init__(self, _("World"), toolbar, embed)
@@ -314,6 +384,9 @@ class World(Clock):
         self.delete_button = Gtk.Button(_("Delete"))
         self.delete_button.connect('clicked', self._on_delete_clicked)
 
+        self.timetravel_button = Gtk.Button(_("Time Travel"))
+        self.timetravel_button.connect('clicked', self._on_time_travel_clicked)
+
         f = os.path.join(Dirs.get_images_dir(), "day.png")
         self.daypixbuf = GdkPixbuf.Pixbuf.new_from_file(f)
         f = os.path.join(Dirs.get_images_dir(), "night.png")
@@ -328,9 +401,11 @@ class World(Clock):
                                   "document-open-recent-symbolic",
                                   _("Select <b>New</b> to add a world clock"))
         self.standalone = WorldStandalone()
+        self.timetravel = WorldTimeTravel()
 
         self.insert_page(contentview, World.Page.OVERVIEW)
         self.insert_page(self.standalone, World.Page.STANDALONE)
+        self.insert_page(self.timetravel, World.Page.TIMETRAVEL)
         self.set_current_page(World.Page.OVERVIEW)
 
         self.storage = WorldClockStorage()
@@ -358,6 +433,13 @@ class World(Clock):
         clocks = [self.liststore[path][2] for path in selection]
         self.delete_clocks(clocks)
         self.iconview.selection_deleted()
+
+    def _on_time_travel_clicked(self, button):
+        selection = self.iconview.get_selection()
+        clocks = [self.liststore[path][2] for path in selection]
+
+        self.timetravel.set_clocks(clocks)
+        self.change_page_spotlight(World.Page.TIMETRAVEL)
 
     def _thumb_data_func(self, view, cell, store, i, data):
         clock = store.get_value(i, 2)
@@ -387,7 +469,7 @@ class World(Clock):
         n_selected = len(selection)
         self._toolbar.set_selection(n_selected)
         if n_selected > 0:
-            self._embed.show_floatingbar(self.delete_button)
+            self._embed.show_floatingbar(self.delete_button, self.timetravel_button)
         else:
             self._embed.hide_floatingbar()
 
@@ -432,6 +514,12 @@ class World(Clock):
             self._toolbar.set_mode(Toolbar.Mode.STANDALONE)
             self._toolbar.add_widget(self.back_button)
             self._toolbar.set_title(GLib.markup_escape_text(self.standalone.clock.name))
+        elif self.get_current_page() == World.Page.TIMETRAVEL:
+            self._toolbar.set_mode(Toolbar.Mode.STANDALONE)
+            self._toolbar.add_widget(self.back_button)
+            self._toolbar.set_title(_("Time Travel"))
+            self.iconview.set_selection_mode(False)
+            self._embed.hide_floatingbar()
 
     def activate_new(self):
         window = NewWorldClockDialog(self.get_toplevel())

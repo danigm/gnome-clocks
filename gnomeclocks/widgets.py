@@ -165,6 +165,11 @@ class Toolbar(Gtk.Toolbar):
             self.pages_box.hide()
             self.selection_label.hide()
             self.title_label.show()
+        elif mode is Toolbar.Mode.TIMETRAVEL:
+            self.get_style_context().remove_class("selection-mode")
+            self.pages_box.hide()
+            self.selection_label.hide()
+            self.title_label.show()
 
     def set_selection(self, n):
         if n == 0:
@@ -199,14 +204,14 @@ class SymbolicToolButton(Gtk.Button):
 
 
 class Spinner(Gtk.SpinButton):
-    def __init__(self, min_value, max_value):
+    def __init__(self, min_value, max_value, font_desc="64.0"):
         super(Spinner, self).__init__()
         self.set_orientation(Gtk.Orientation.VERTICAL)
         self.set_numeric(True)
         self.set_increments(1.0, 1.0)
         self.set_wrap(True)
         self.set_range(min_value, max_value)
-        attrs = Pango.parse_markup('<span font_desc=\"64.0\">00</span>', -1, '\x00')[1]
+        attrs = Pango.parse_markup('<span font_desc=\"%s\">00</span>' % font_desc, -1, '\x00')[1]
         self.set_attributes(attrs)
 
         self.connect('output', self._show_leading_zeros)
@@ -604,9 +609,10 @@ class Embed(GtkClutter.Embed):
         self._background.restore_easing_state()
         self._background.connect('transition-stopped::opacity', self._spotlight_finished)
 
-    def show_floatingbar(self, widget):
+    def show_floatingbar(self, *widgets):
         self._floatingToolbar.clear()
-        self._floatingToolbar.add_widget(widget)
+        for widget in widgets:
+            self._floatingToolbar.add_widget(widget)
         self._floatingToolbar.fade_in()
 
     def hide_floatingbar(self):
